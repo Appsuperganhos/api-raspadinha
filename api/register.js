@@ -1,4 +1,5 @@
 import { supabase } from './utils/supabaseClient.js';
+import bcrypt from 'bcryptjs';
 
 export default async function handler(req, res) {
   // --- CORS HEADERS ---
@@ -14,39 +15,46 @@ export default async function handler(req, res) {
     res.status(200).end();
     return;
   }
-  // --------------------
 
   if (req.method !== 'POST') return res.status(405).end();
 
   const { nome, email, senha, telefone } = req.body;
 
   try {
-    // 1. Cadastro pelo Auth
-    const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
-      email,
-      password: senha
-    });
+    if (!nome || !email || !senha || !telefone) throw new Error("Preencha todos os campos");
 
-    if (signUpError) throw signUpError;
-    const user = signUpData.user;
-    if (!user || !user.id) throw new Error("Falha ao criar usuário no Auth");
-
-    // 2. Cadastro na tabela 'usuarios'
-    const { error: insertError } = await supabase
+    // Checa se o e-mail já existe
+    const { data: existing } = await supabase
       .from('usuarios')
-      .insert({
-        id: user.id,
-        nome,
-        email,
-        telefone,
-        saldo: 0
-      });
+      .select('id')
+      .eq('email', email)
+      .single();
 
-    if (insertError) throw insertError; // Vai mostrar o erro real do insert, inclusive de RLS!
+    if (existing) throw new Error("E-mail já cadastrado!");
 
-    return res.status(200).json({ success: true, usuario: user });
+    // Cria hash da senha
+    const hashedPassword = await bcrypt.hash(senha, 10);
+
+    // Insere usuário
+    const { data, error: insertError } = await supabase
+      .from('usuarios')
+      .insert([
+        {
+          nome,
+          email,
+          telefone,
+          senha: hashedPassword,
+          saldo: 0
+        }
+      ])
+      .select('id, nome, email, telefone, saldo')
+      .single();
+
+    if (insertError) throw insertError;
+
+    // Retorna dados não sensíveis
+    return res.status(200).json({ success: true, usuario: data });
   } catch (error) {
-    // Debug avançado: loga no server da Vercel (veja em "Logs")
     console.error('ERRO NO CADASTRO:', error);
     return res.status(500).json({ success: false, mensagem: error.message || "Erro desconhecido" });
   }
