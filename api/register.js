@@ -1,6 +1,5 @@
 import { supabase } from './utils/supabaseClient.js';
 import bcrypt from 'bcryptjs';
-import { v4 as uuidv4 } from 'uuid';
 
 export default async function handler(req, res) {
   // --- CORS HEADERS ---
@@ -32,27 +31,38 @@ export default async function handler(req, res) {
       .eq('email', email)
       .single();
 
+    if (existError && existError.code !== 'PGRST116') {
+      // PGRST116 = "Results contain 0 rows" (sem erro, segue)
+      throw existError;
+    }
     if (existing) throw new Error("E-mail já cadastrado!");
 
     // 3. Gera hash da senha
     const hashedPassword = await bcrypt.hash(senha, 10);
 
-    // 4. Insere usuário (id gerado aqui)
+    // 4. Prepara dados
+    const insertData = {
+      nome,
+      email,
+      telefone,
+      saldo: 0,
+      senha: hashedPassword
+    };
+    console.log('Tentando inserir usuário:', insertData);
+
+    // 5. Insere usuário (ID autogerado pelo Supabase)
     const { data, error: insertError } = await supabase
       .from('usuarios')
-      .insert([{
-        nome,
-        email,
-        telefone,
-        saldo: 0,
-        senha: hashedPassword
-      }])
+      .insert([insertData])
       .select('id, nome, email, telefone, saldo, criado_em')
       .single();
 
-    if (insertError) throw insertError;
+    if (insertError) {
+      console.error('ERRO AO INSERIR USUARIO:', insertError);
+      throw insertError;
+    }
 
-    // 5. Retorna dados não sensíveis
+    // 6. Retorna dados não sensíveis
     return res.status(200).json({ success: true, usuario: data });
   } catch (error) {
     console.error('ERRO NO CADASTRO:', error);
