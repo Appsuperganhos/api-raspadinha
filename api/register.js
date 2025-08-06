@@ -1,5 +1,4 @@
 import { supabase } from './utils/supabaseClient.js';
-import bcrypt from 'bcryptjs';
 
 export default async function handler(req, res) {
   // --- CORS HEADERS ---
@@ -22,39 +21,32 @@ export default async function handler(req, res) {
   const { nome, email, senha, telefone } = req.body;
 
   try {
-    // 1. Validações básicas
-    if (!nome || !email || !senha || !telefone) throw new Error("Preencha todos os campos");
+    // 1. Cadastro pelo Auth
+    const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+      email,
+      password: senha
+    });
 
-    // 2. Checa se email já existe
-    const { data: existing, error: existError } = await supabase
-      .from('usuarios')
-      .select('id')
-      .eq('email', email)
-      .single();
+    if (signUpError) throw signUpError;
+    const user = signUpData.user;
+    if (!user || !user.id) throw new Error("Falha ao criar usuário no Auth");
 
-    if (existing) throw new Error("E-mail já cadastrado!");
-
-    // 3. Cria hash da senha
-    const hashedPassword = await bcrypt.hash(senha, 10);
-
-    // 4. Insere usuário na tabela
-    const { data, error: insertError } = await supabase
+    // 2. Cadastro na tabela 'usuarios'
+    const { error: insertError } = await supabase
       .from('usuarios')
       .insert({
+        id: user.id,
         nome,
         email,
         telefone,
-        senha: hashedPassword,
         saldo: 0
-      })
-      .select('id, nome, email, telefone, saldo')
-      .single();
+      });
 
-    if (insertError) throw insertError;
+    if (insertError) throw insertError; // Vai mostrar o erro real do insert, inclusive de RLS!
 
-    // 5. Retorna apenas dados não sensíveis
-    return res.status(200).json({ success: true, usuario: data });
+    return res.status(200).json({ success: true, usuario: user });
   } catch (error) {
+    // Debug avançado: loga no server da Vercel (veja em "Logs")
     console.error('ERRO NO CADASTRO:', error);
     return res.status(500).json({ success: false, mensagem: error.message || "Erro desconhecido" });
   }
