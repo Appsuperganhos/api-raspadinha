@@ -1,4 +1,3 @@
-// api/register.js
 import { supabase } from './utils/supabaseClient.js';
 
 export default async function handler(req, res) {
@@ -7,15 +6,18 @@ export default async function handler(req, res) {
   const { nome, email, senha, telefone } = req.body;
 
   try {
+    // 1. Cadastro pelo Auth
     const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
       email,
       password: senha
     });
 
     if (signUpError) throw signUpError;
+    const user = signUpData.user; // <-- Correto!
 
-    const { data: user } = signUpData;
+    if (!user || !user.id) throw new Error("Falha ao criar usuário no Auth");
 
+    // 2. Cadastro na tabela 'usuarios'
     await supabase.from('usuarios').insert({
       id: user.id,
       nome,
