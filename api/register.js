@@ -32,16 +32,22 @@ export default async function handler(req, res) {
     if (!user || !user.id) throw new Error("Falha ao criar usuário no Auth");
 
     // 2. Cadastro na tabela 'usuarios'
-    await supabase.from('usuarios').insert({
-      id: user.id,
-      nome,
-      email,
-      telefone,
-      saldo: 0
-    });
+    const { error: insertError } = await supabase
+      .from('usuarios')
+      .insert({
+        id: user.id,
+        nome,
+        email,
+        telefone,
+        saldo: 0
+      });
+
+    if (insertError) throw insertError; // Vai mostrar o erro real do insert, inclusive de RLS!
 
     return res.status(200).json({ success: true, usuario: user });
   } catch (error) {
-    return res.status(500).json({ success: false, mensagem: error.message });
+    // Debug avançado: loga no server da Vercel (veja em "Logs")
+    console.error('ERRO NO CADASTRO:', error);
+    return res.status(500).json({ success: false, mensagem: error.message || "Erro desconhecido" });
   }
 }
