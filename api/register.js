@@ -1,5 +1,6 @@
 import { supabase } from './utils/supabaseClient.js';
 import bcrypt from 'bcryptjs';
+import { v4 as uuidv4 } from 'uuid';
 
 export default async function handler(req, res) {
   // --- CORS HEADERS ---
@@ -15,16 +16,17 @@ export default async function handler(req, res) {
     res.status(200).end();
     return;
   }
-
   if (req.method !== 'POST') return res.status(405).end();
 
   const { nome, email, senha, telefone } = req.body;
 
   try {
-    if (!nome || !email || !senha || !telefone) throw new Error("Preencha todos os campos");
+    // 1. Validações
+    if (!nome || !email || !senha || !telefone)
+      throw new Error("Preencha todos os campos obrigatórios!");
 
-    // Checa se o e-mail já existe
-    const { data: existing } = await supabase
+    // 2. Verifica se email já existe
+    const { data: existing, error: existError } = await supabase
       .from('usuarios')
       .select('id')
       .eq('email', email)
@@ -32,27 +34,26 @@ export default async function handler(req, res) {
 
     if (existing) throw new Error("E-mail já cadastrado!");
 
-    // Cria hash da senha
+    // 3. Gera hash da senha
     const hashedPassword = await bcrypt.hash(senha, 10);
 
-    // Insere usuário
+    // 4. Insere usuário (id gerado aqui)
     const { data, error: insertError } = await supabase
       .from('usuarios')
-      .insert([
-        {
-          nome,
-          email,
-          telefone,
-          senha: hashedPassword,
-          saldo: 0
-        }
-      ])
-      .select('id, nome, email, telefone, saldo')
+      .insert([{
+        id: uuidv4(), // força UUID na criação
+        nome,
+        email,
+        telefone,
+        saldo: 0,
+        senha: hashedPassword
+      }])
+      .select('id, nome, email, telefone, saldo, criado_em')
       .single();
 
     if (insertError) throw insertError;
 
-    // Retorna dados não sensíveis
+    // 5. Retorna dados não sensíveis
     return res.status(200).json({ success: true, usuario: data });
   } catch (error) {
     console.error('ERRO NO CADASTRO:', error);
