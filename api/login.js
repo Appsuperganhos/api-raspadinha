@@ -1,6 +1,7 @@
-// api/login.js
+import { supabase } from './utils/supabaseClient.js';
+
 export default async function handler(req, res) {
-  // CORS headers
+  // --- CORS HEADERS ---
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', 'https://linkprivado.shop'); // seu domínio aqui!
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
@@ -13,10 +14,8 @@ export default async function handler(req, res) {
     res.status(200).end();
     return;
   }
+  // ---------------------
 
-import { supabase } from './utils/supabaseClient.js';
-
-export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end();
 
   const { email, senha } = req.body;
@@ -42,7 +41,6 @@ export default async function handler(req, res) {
       .single();
 
     if (profileError) {
-      // Opcional: pode ainda retornar o mínimo de dados se não achar perfil
       throw new Error('Usuário não encontrado no banco');
     }
 
