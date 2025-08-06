@@ -41,7 +41,6 @@ export default async function handler(req, res) {
     const { data, error: insertError } = await supabase
       .from('usuarios')
       .insert([{
-        id: uuidv4(), // força UUID na criação
         nome,
         email,
         telefone,
