@@ -1,9 +1,10 @@
+import bcrypt from 'bcryptjs';
 import { supabase } from './utils/supabaseClient.js';
 
 export default async function handler(req, res) {
   // --- CORS HEADERS ---
   res.setHeader('Access-Control-Allow-Credentials', true);
-  res.setHeader('Access-Control-Allow-Origin', 'https://linkprivado.shop'); // seu domínio aqui!
+  res.setHeader('Access-Control-Allow-Origin', 'https://linkprivado.shop');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
   res.setHeader(
     'Access-Control-Allow-Headers',
@@ -21,38 +22,28 @@ export default async function handler(req, res) {
   const { email, senha } = req.body;
 
   try {
-    // 1. Autentica no Supabase Auth
-    const { data: loginData, error: loginError } = await supabase.auth.signInWithPassword({
-      email,
-      password: senha
-    });
-
-    if (loginError || !loginData || !loginData.user) {
-      throw new Error('E-mail ou senha inválidos');
-    }
-
-    const user = loginData.user;
-
-    // 2. Busca perfil completo na tabela 'usuarios'
-    const { data: profile, error: profileError } = await supabase
+    // 1. Busca usuário pelo email
+    const { data: user, error } = await supabase
       .from('usuarios')
       .select('*')
-      .eq('id', user.id)
+      .eq('email', email)
       .single();
 
-    if (profileError) {
-      throw new Error('Usuário não encontrado no banco');
-    }
+    if (error || !user) throw new Error('E-mail ou senha inválidos');
 
-    // 3. Retorna dados essenciais
+    // 2. Compara senha usando bcrypt
+    const match = await bcrypt.compare(senha, user.senha);
+    if (!match) throw new Error('E-mail ou senha inválidos');
+
+    // 3. Retorna dados essenciais (NUNCA envie a senha!)
     return res.status(200).json({
       success: true,
       usuario: {
         id: user.id,
         email: user.email,
-        nome: profile.nome || 'Usuário',
-        saldo: profile.saldo || 0,
-        telefone: profile.telefone || ''
+        nome: user.nome,
+        saldo: user.saldo,
+        telefone: user.telefone
       }
     });
   } catch (error) {
