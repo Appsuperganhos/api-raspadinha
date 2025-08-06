@@ -1,7 +1,9 @@
+import { supabase } from './utils/supabaseClient.js';
+
 export default async function handler(req, res) {
-  // CORS headers
+  // --- CORS HEADERS ---
   res.setHeader('Access-Control-Allow-Credentials', true);
-  res.setHeader('Access-Control-Allow-Origin', 'https://linkprivado.shop'); // seu domínio aqui!
+  res.setHeader('Access-Control-Allow-Origin', 'https://linkprivado.shop');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
   res.setHeader(
     'Access-Control-Allow-Headers',
@@ -12,10 +14,8 @@ export default async function handler(req, res) {
     res.status(200).end();
     return;
   }
+  // --------------------
 
-import { supabase } from './utils/supabaseClient.js';
-
-export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end();
 
   const { nome, email, senha, telefone } = req.body;
@@ -28,8 +28,7 @@ export default async function handler(req, res) {
     });
 
     if (signUpError) throw signUpError;
-    const user = signUpData.user; // <-- Correto!
-
+    const user = signUpData.user;
     if (!user || !user.id) throw new Error("Falha ao criar usuário no Auth");
 
     // 2. Cadastro na tabela 'usuarios'
