@@ -26,7 +26,7 @@ export default async function handler(req, res) {
 
       const { data: transacoes, error } = await supabase
         .from('transacoes')
-        .select('id, usuario_id, tipo, valor, status, criado_em, external_id, descricao, jogo_id, premio')
+        .select('id, usuario_id, tipo, valor, status, criado_em, external_id') // <-- apenas colunas existentes
         .eq('usuario_id', usuario_id)
         .order('criado_em', { ascending: false });
 
@@ -43,18 +43,13 @@ export default async function handler(req, res) {
     // {
     //   "usuario_id": "<uuid>",
     //   "tipo": "bet" | "win" | "deposit" | "withdraw",
-    //   "valor": number,              // valor POSITIVO
-    //   "status": "completed",        // opcional, default 'completed'
-    //   "jogo_id": number,            // opcional
-    //   "premio": number,             // opcional (para 'win')
-    //   "descricao": string           // opcional
+    //   "valor": number,
+    //   "status": "completed",          // opcional
+    //   "external_id": "string-opc"     // opcional
     // }
-    // Registra a transação e atualiza o saldo de 'usuarios'
-    // Regras de saldo:
-    //   - bet      => saldo -= valor
-    //   - win      => saldo += valor (ou premio, se enviado)
-    //   - deposit  => saldo += valor
-    //   - withdraw => saldo -= valor
+    // Regras saldo:
+    //   bet/withdraw => saldo -= valor
+    //   win/deposit  => saldo += valor
     // ==========================================
     if (req.method === 'POST') {
       const {
@@ -62,12 +57,9 @@ export default async function handler(req, res) {
         tipo,
         valor,
         status = 'completed',
-        jogo_id = null,
-        premio = null,
-        descricao = null
+        external_id = null
       } = req.body || {};
 
-      // validações básicas
       if (!usuario_id) {
         return res
           .status(400)
@@ -102,22 +94,14 @@ export default async function handler(req, res) {
           .json({ success: false, mensagem: 'Usuário não encontrado.' });
       }
 
-      // Calcula impacto no saldo
+      // Calcula delta no saldo
       let delta = 0;
-      if (tipo === 'bet') {
-        delta = -numValor;
-      } else if (tipo === 'win') {
-        delta = Number.isFinite(Number(premio)) ? Number(premio) : numValor;
-      } else if (tipo === 'deposit') {
-        delta = numValor;
-      } else if (tipo === 'withdraw') {
-        delta = -numValor;
-      }
+      if (tipo === 'bet' || tipo === 'withdraw') delta = -numValor;
+      if (tipo === 'win' || tipo === 'deposit') delta = +numValor;
 
       const saldoAtual = Number(userRow.saldo) || 0;
       const novoSaldo = saldoAtual + delta;
 
-      // Não deixar saldo negativo (regra opcional; remova se não quiser)
       if (novoSaldo < 0) {
         return res.status(400).json({
           success: false,
@@ -125,28 +109,26 @@ export default async function handler(req, res) {
         });
       }
 
-      // 1) Insere a transação
+      // 1) Insere transação (apenas colunas existentes)
       const insertData = {
         usuario_id,
         tipo,
         valor: numValor,
         status,
-        descricao,
-        jogo_id,
-        premio
+        external_id
       };
 
       const { data: transacao, error: insertErr } = await supabase
         .from('transacoes')
         .insert([insertData])
-        .select('*')
+        .select('id, usuario_id, tipo, valor, status, criado_em, external_id')
         .single();
 
       if (insertErr) {
         return res.status(500).json({ success: false, mensagem: insertErr.message });
       }
 
-      // 2) Atualiza saldo do usuário
+      // 2) Atualiza saldo
       const { data: updatedUser, error: updErr } = await supabase
         .from('usuarios')
         .update({ saldo: novoSaldo })
@@ -158,7 +140,6 @@ export default async function handler(req, res) {
         return res.status(500).json({ success: false, mensagem: updErr.message });
       }
 
-      // Retorna resultado
       return res.status(200).json({
         success: true,
         transacao,
@@ -166,7 +147,6 @@ export default async function handler(req, res) {
       });
     }
 
-    // Método não permitido
     return res.status(405).json({ success: false, mensagem: 'Method not allowed.' });
   } catch (err) {
     console.error('ERRO /api/transacoes:', err);
