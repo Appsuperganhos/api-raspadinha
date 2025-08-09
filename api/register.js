@@ -4,7 +4,7 @@ import bcrypt from 'bcryptjs';
 export default async function handler(req, res) {
   // --- CORS HEADERS ---
   res.setHeader('Access-Control-Allow-Credentials', true);
-  res.setHeader('Access-Control-Allow-Origin', 'https://linkprivado.shop');
+  res.setHeader('Access-Control-Allow-Origin', 'https://raspamaster.site');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
   res.setHeader(
     'Access-Control-Allow-Headers',
