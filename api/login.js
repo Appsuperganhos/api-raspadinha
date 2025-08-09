@@ -11,10 +11,7 @@ export default async function handler(req, res) {
     'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version'
   );
 
-  if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
-  }
+  if (req.method === 'OPTIONS') { res.status(200).end(); return; }
   if (req.method !== 'POST') return res.status(405).end();
 
   const { email, senha } = req.body;
@@ -22,52 +19,38 @@ export default async function handler(req, res) {
   try {
     if (!email || !senha) throw new Error('E-mail e senha são obrigatórios!');
 
-    const emailNorm = String(email).trim().toLowerCase();
-
-    // Busca usuário pelo email (apenas colunas necessárias)
+    // ⚠️ Seleciona explicitamente a coluna "isAdmin" (com aspas!) e a senha para comparar
     const { data: user, error: findError } = await supabase
       .from('usuarios')
-      .select('id, nome, email, telefone, saldo, criado_em, senha, is_admin')
-      .eq('email', emailNorm)
+      .select('id, nome, email, telefone, saldo, criado_em, senha, "isAdmin"')
+      .ilike('email', email.trim())   // case-insensitive e sem espaços
       .single();
 
     if (findError || !user) {
-      console.log('Usuário não encontrado:', emailNorm, findError);
+      console.log('Usuário não encontrado:', email, findError);
       throw new Error('E-mail ou senha inválidos');
     }
 
-    if (!user.senha) {
-      console.log('Usuário sem hash de senha cadastrado:', emailNorm);
+    const senhaOk = await bcrypt.compare(senha, user.senha);
+    if (!senhaOk) {
+      console.log('Senha incorreta para:', email);
       throw new Error('E-mail ou senha inválidos');
     }
 
-    // Compara senha usando bcrypt
-    const senhaConfere = await bcrypt.compare(senha, user.senha);
-    if (!senhaConfere) {
-      console.log('Senha incorreta para:', emailNorm);
-      throw new Error('E-mail ou senha inválidos');
-    }
-
-    // Retorna dados essenciais (NUNCA envie a senha!)
+    // NUNCA retornar a hash de senha
     const usuarioRetorno = {
       id: user.id,
       email: user.email,
       nome: user.nome,
-      saldo: user.saldo ?? 0,
-      telefone: user.telefone ?? null,
+      saldo: user.saldo,
+      telefone: user.telefone,
       criado_em: user.criado_em,
-      isAdmin: !!user.is_admin, // <-- importante para o painel
+      isAdmin: !!user.isAdmin    // <- campo certo
     };
 
-    return res.status(200).json({
-      success: true,
-      usuario: usuarioRetorno
-    });
+    return res.status(200).json({ success: true, usuario: usuarioRetorno });
   } catch (error) {
     console.error('ERRO AO LOGAR:', error);
-    return res.status(401).json({
-      success: false,
-      mensagem: error.message || 'Falha ao realizar login'
-    });
+    return res.status(401).json({ success: false, mensagem: error.message || 'Falha ao realizar login' });
   }
 }
