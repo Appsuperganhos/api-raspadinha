@@ -4,7 +4,7 @@ import { supabase } from './utils/supabaseClient.js';
 export default async function handler(req, res) {
   // CORS
   res.setHeader('Access-Control-Allow-Credentials', true);
-  res.setHeader('Access-Control-Allow-Origin', 'https://linkprivado.shop'); // ajuste se precisar
+  res.setHeader('Access-Control-Allow-Origin', 'https://raspamaster.site'); // ajuste se precisar
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
   res.setHeader(
     'Access-Control-Allow-Headers',
