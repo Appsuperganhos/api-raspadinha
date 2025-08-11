@@ -53,53 +53,102 @@ export default async function handler(req, res) {
     }
 
     if (req.method !== 'POST') {
-      return res.status(405).json({ success: false, mensagem: 'Método não permitido' });
-    }
+  return res.status(405).json({ success: false, mensagem: 'Método não permitido' });
+}
 
-    const body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {});
-    const { usuario_id, valor, tipo, status = 'completed', descricao = null, external_id = null } = body;
+const body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {});
+const { usuario_id, valor, tipo, status = 'completed', descricao = null, external_id = null } = body;
 
-    if (!usuario_id || typeof valor !== 'number' || !tipo) {
-      return res.status(400).json({ success: false, mensagem: 'Campos obrigatórios: usuario_id, valor (number) e tipo.' });
-    }
+if (!usuario_id || typeof valor !== 'number' || !tipo) {
+  return res.status(400).json({ success: false, mensagem: 'Campos obrigatórios: usuario_id, valor (number) e tipo.' });
+}
 
-    const tipoNorm = String(tipo).toLowerCase();
-    if (!['bet','win','deposit'].includes(tipoNorm)) {
-      return res.status(400).json({ success: false, mensagem: 'tipo inválido.' });
-    }
-    if (tipoNorm === 'deposit' && String(status).toLowerCase() !== 'completed') {
-      return res.status(200).json({ success: true, mensagem: 'Depósito não confirmado, ignorado.' });
-    }
+const tipoNorm = String(tipo).toLowerCase();
+if (!['bet','win','deposit'].includes(tipoNorm)) {
+  return res.status(400).json({ success: false, mensagem: 'tipo inválido.' });
+}
 
-    const { data: uData, error: uErr } = await supabase
-      .from('usuarios')
-      .select('saldo')
-      .eq('id', usuario_id)
-      .single();
-    if (uErr || !uData) {
-      return res.status(404).json({ success: false, mensagem: 'Usuário não encontrado.' });
-    }
+// Depósito pendente → insere sem atualizar saldo
+if (tipoNorm === 'deposit' && String(status).toLowerCase() !== 'completed') {
+  const { data: pendingRow, error: pendingErr } = await supabase
+    .from('transacoes')
+    .insert([{ usuario_id, valor: Math.abs(Number(valor)), tipo: tipoNorm, status, descricao, external_id }])
+    .select()
+    .single();
 
-    const saldoAtual = Number(uData.saldo) || 0;
-    let delta = 0;
-    if (tipoNorm === 'bet') delta = -Math.abs(Number(valor));
-    if (tipoNorm === 'win' || tipoNorm === 'deposit') delta = +Math.abs(Number(valor));
-    const novoSaldo = saldoAtual + delta;
+  if (pendingErr) {
+    console.error('insert pending deposit failed', pendingErr);
+    return res.status(500).json({ success: false, mensagem: pendingErr.message });
+  }
 
-    const { error: updErr } = await supabase.from('usuarios').update({ saldo: novoSaldo }).eq('id', usuario_id);
-    if (updErr) throw updErr;
+  const { data: u0, error: u0e } = await supabase
+    .from('usuarios')
+    .select('saldo')
+    .eq('id', usuario_id)
+    .single();
 
-    const { data: inserted, error: insErr } = await supabase
-      .from('transacoes')
-      .insert([{ usuario_id, valor: Math.abs(Number(valor)), tipo: tipoNorm, status, descricao, external_id }])
-      .select()
-      .single();
-    if (insErr) {
-      await supabase.from('usuarios').update({ saldo: saldoAtual }).eq('id', usuario_id);
-      throw insErr;
-    }
+  if (u0e) return res.status(500).json({ success: false, mensagem: u0e.message });
 
-    return res.status(201).json({ success: true, message: 'Transação registrada', data: { saldo: novoSaldo, transaction: inserted } });
+  return res.status(201).json({
+    success: true,
+    message: 'Transação registrada como não concluída',
+    data: { saldo: u0?.saldo ?? 0, transaction: pendingRow }
+  });
+}
+
+// Completed (bet, win, deposit) → trigger fará o update de saldo
+const row = {
+  usuario_id,
+  valor: Math.abs(Number(valor)),
+  tipo: tipoNorm,
+  status,
+  descricao,
+  external_id
+};
+
+let inserted = null;
+let insErr = null;
+
+if (external_id) {
+  const up = await supabase
+    .from('transacoes')
+    .upsert([row], { onConflict: 'external_id' })
+    .select()
+    .single();
+  inserted = up.data;
+  insErr = up.error;
+} else {
+  const ins = await supabase
+    .from('transacoes')
+    .insert([row])
+    .select()
+    .single();
+  inserted = ins.data;
+  insErr = ins.error;
+}
+
+if (insErr) {
+  console.error('insert/upsert transaction failed', insErr);
+  return res.status(500).json({ success: false, mensagem: insErr.message });
+}
+
+// Lê saldo atualizado pelo trigger
+const { data: u, error: ue } = await supabase
+  .from('usuarios')
+  .select('saldo')
+  .eq('id', usuario_id)
+  .single();
+
+if (ue) {
+  console.error('fetch saldo after trigger failed', ue);
+  return res.status(500).json({ success: false, mensagem: ue.message });
+}
+
+return res.status(201).json({
+  success: true,
+  message: 'Transação registrada',
+  data: { saldo: u?.saldo ?? 0, transaction: inserted }
+});
   } catch (err) {
     console.error('Erro /api/transacoes:', err);
     return res.status(500).json({ success: false, mensagem: err.message });
