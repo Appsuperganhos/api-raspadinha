@@ -52,7 +52,7 @@ export default async function handler(req, res) {
       });
     }
 
-    if (req.method !== 'POST') {
+if (req.method !== 'POST') {
   return res.status(405).json({ success: false, mensagem: 'Método não permitido' });
 }
 
@@ -68,36 +68,58 @@ if (!['bet','win','deposit'].includes(tipoNorm)) {
   return res.status(400).json({ success: false, mensagem: 'tipo inválido.' });
 }
 
-// Depósito pendente → insere sem atualizar saldo
+// 💡 Depósito só credita se for completed
 if (tipoNorm === 'deposit' && String(status).toLowerCase() !== 'completed') {
-  const { data: pendingRow, error: pendingErr } = await supabase
-    .from('transacoes')
-    .insert([{ usuario_id, valor: Math.abs(Number(valor)), tipo: tipoNorm, status, descricao, external_id }])
-    .select()
-    .single();
-
-  if (pendingErr) {
-    console.error('insert pending deposit failed', pendingErr);
-    return res.status(500).json({ success: false, mensagem: pendingErr.message });
-  }
-
-  const { data: u0, error: u0e } = await supabase
-    .from('usuarios')
-    .select('saldo')
-    .eq('id', usuario_id)
-    .single();
-
-  if (u0e) return res.status(500).json({ success: false, mensagem: u0e.message });
-
-  return res.status(201).json({
-    success: true,
-    message: 'Transação registrada como não concluída',
-    data: { saldo: u0?.saldo ?? 0, transaction: pendingRow }
-  });
+  return res.status(200).json({ success: true, mensagem: 'Depósito não confirmado, ignorado.' });
 }
 
-// Completed (bet, win, deposit) → trigger fará o update de saldo
-const row = {
+// 🔒 Idempotência de depósito: se vier com external_id e já houver completed com o mesmo id, não creditar de novo
+if (tipoNorm === 'deposit' && external_id) {
+  const { data: dup, error: dupErr } = await supabase
+    .from('transacoes')
+    .select('id, usuario_id')
+    .eq('external_id', external_id)
+    .eq('tipo', 'deposit')
+    .eq('status', 'completed')
+    .maybeSingle();
+  if (dupErr) {
+    console.error('Erro checando duplicidade:', dupErr);
+  }
+  if (dup) {
+    // Já processado. Retorna saldo atual para sincronizar o front.
+    const { data: uRow } = await supabase
+      .from('usuarios')
+      .select('saldo')
+      .eq('id', usuario_id)
+      .single();
+    return res.status(200).json({
+      success: true,
+      mensagem: 'Depósito já processado',
+      data: { saldo: Number(uRow?.saldo) ?? 0 }
+    });
+  }
+}
+
+// Busca saldo atual
+const { data: uData, error: uErr } = await supabase
+  .from('usuarios')
+  .select('saldo')
+  .eq('id', usuario_id)
+  .single();
+
+if (uErr || !uData) {
+  return res.status(404).json({ success: false, mensagem: 'Usuário não encontrado.' });
+}
+
+const saldoAtual = Number(uData.saldo) || 0;
+
+// Define delta
+let delta = 0;
+if (tipoNorm === 'bet') delta = -Math.abs(Number(valor));
+if (tipoNorm === 'win' || tipoNorm === 'deposit') delta = +Math.abs(Number(valor));
+
+// 1) Primeiro insere a transação (se falhar, não mexe no saldo)
+const insertData = {
   usuario_id,
   valor: Math.abs(Number(valor)),
   tipo: tipoNorm,
@@ -106,48 +128,54 @@ const row = {
   external_id
 };
 
+// Para depósitos com external_id, evita outra corrida: tenta inserir e, se outro processo inseriu no meio tempo,
+// a gente não atualiza saldo de novo.
 let inserted = null;
-let insErr = null;
-
-if (external_id) {
-  const up = await supabase
+{
+  const { data, error: insErr } = await supabase
     .from('transacoes')
-    .upsert([row], { onConflict: 'external_id' })
+    .insert([insertData])
     .select()
     .single();
-  inserted = up.data;
-  insErr = up.error;
-} else {
-  const ins = await supabase
-    .from('transacoes')
-    .insert([row])
-    .select()
-    .single();
-  inserted = ins.data;
-  insErr = ins.error;
+
+  if (insErr) {
+    // Se erro foi por duplicidade (caso você crie uma unique constraint em external_id), apenas retorna saldo atual
+    const msg = String(insErr.message || '');
+    if (tipoNorm === 'deposit' && external_id && (msg.includes('duplicate') || msg.includes('unique'))) {
+      const { data: uRow } = await supabase
+        .from('usuarios')
+        .select('saldo')
+        .eq('id', usuario_id)
+        .single();
+      return res.status(200).json({
+        success: true,
+        mensagem: 'Depósito já processado (unique constraint)',
+        data: { saldo: Number(uRow?.saldo) ?? saldoAtual }
+      });
+    }
+    // Outro erro: aborta
+    throw insErr;
+  }
+  inserted = data;
 }
 
-if (insErr) {
-  console.error('insert/upsert transaction failed', insErr);
-  return res.status(500).json({ success: false, mensagem: insErr.message });
-}
-
-// Lê saldo atualizado pelo trigger
-const { data: u, error: ue } = await supabase
+// 2) Só depois atualiza o saldo
+const novoSaldo = saldoAtual + delta;
+const { error: updErr } = await supabase
   .from('usuarios')
-  .select('saldo')
-  .eq('id', usuario_id)
-  .single();
+  .update({ saldo: novoSaldo })
+  .eq('id', usuario_id);
 
-if (ue) {
-  console.error('fetch saldo after trigger failed', ue);
-  return res.status(500).json({ success: false, mensagem: ue.message });
+if (updErr) {
+  // rollback best effort: remove a transação recém inserida para manter consistência
+  await supabase.from('transacoes').delete().eq('id', inserted?.id || '00000000-0000-0000-0000-000000000000');
+  throw updErr;
 }
 
 return res.status(201).json({
   success: true,
   message: 'Transação registrada',
-  data: { saldo: u?.saldo ?? 0, transaction: inserted }
+  data: { saldo: novoSaldo, transaction: inserted }
 });
   } catch (err) {
     console.error('Erro /api/transacoes:', err);
