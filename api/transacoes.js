@@ -1,69 +1,153 @@
 // api/transacoes.js
 import { supabase } from './utils/supabaseClient.js';
 
-export default async function handler(req, res) {
-  // --- CORS ---
-  res.setHeader('Access-Control-Allow-Credentials', true);
-  res.setHeader('Access-Control-Allow-Origin', '*'); // se quiser, troque por seu domínio
+// --- CORS helper ---
+const ALLOWED_ORIGINS = [
+  'https://raspamaster.site',
+  'http://localhost:5173',
+  'http://localhost:3000',
+];
+
+function setCORS(req, res) {
+  const origin = req.headers.origin || '';
+  const allowExact = ALLOWED_ORIGINS.includes(origin);
+
+  // Se for uma origem conhecida, reflete a origem e permite credenciais
+  if (allowExact) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+  } else {
+    // Sem credenciais quando usar "*"
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  }
+
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   res.setHeader(
     'Access-Control-Allow-Headers',
-    'Content-Type, X-Requested-With, Accept'
+    'Content-Type, Authorization, X-Requested-With, Accept, Origin'
   );
-  if (req.method === 'OPTIONS') return res.status(200).end();
+}
+
+export default async function handler(req, res) {
+  setCORS(req, res);
+  if (req.method === 'OPTIONS') {
+    // 204 para preflight
+    return res.status(204).end();
+  }
 
   try {
+    // ===========================
+    // GET: listar transações
+    // ===========================
     if (req.method === 'GET') {
-      // (opcional) listar transações por usuario_id
-      const { usuario_id } = req.query;
-      if (!usuario_id) {
-        return res.status(400).json({ success: false, mensagem: 'Informe usuario_id.' });
+      // aceita userId OU usuario_id
+      const userId = req.query.userId || req.query.usuario_id;
+      if (!userId) {
+        return res
+          .status(400)
+          .json({ success: false, mensagem: 'Informe userId (ou usuario_id).' });
       }
 
-      const { data: transacoes, error } = await supabase
+      // paginação / filtro / sort (opcionais)
+      const page = Math.max(1, parseInt(req.query.page || '1', 10));
+      const pageSize = Math.min(
+        100,
+        Math.max(1, parseInt(req.query.pageSize || '20', 10))
+      );
+      const type = String(req.query.type || 'all').toLowerCase(); // all | bet | win | deposit | withdraw
+      const sort = String(req.query.sort || '-date'); // "-date" desc, "date" asc
+
+      // base query
+      let query = supabase
         .from('transacoes')
-        .select('id, valor, status, tipo, criado_em, external_id, descricao')
-        .eq('usuario_id', usuario_id)
-        .order('criado_em', { ascending: false });
+        .select(
+          'id, usuario_id, valor, status, tipo, criado_em, external_id, descricao',
+          { count: 'exact' }
+        )
+        .eq('usuario_id', userId);
 
+      // filtro por tipo
+      if (type !== 'all') query = query.eq('tipo', type);
+
+      // ordenação
+      const ascending = sort === 'date';
+      query = query.order('criado_em', { ascending });
+
+      // range (Supabase usa índices base 0)
+      const from = (page - 1) * pageSize;
+      const to = from + pageSize - 1;
+      query = query.range(from, to);
+
+      const { data, error, count } = await query;
       if (error) throw error;
-      return res.status(200).json({ success: true, transacoes });
+
+      // mapeia para formato novo (UI nova) e legado (UI antiga)
+      const items = (data || []).map((t) => ({
+        id: t.id,
+        type: t.tipo,
+        amount: Number(t.valor),
+        status: t.status,
+        date: t.criado_em,
+        description: t.descricao || '',
+        external_id: t.external_id || null,
+      }));
+
+      const total = typeof count === 'number' ? count : items.length;
+      const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+      return res.status(200).json({
+        success: true,
+        // formato NOVO (preferido pelo front novo)
+        data: {
+          items,
+          total,
+          totalPages,
+          currentPage: page,
+        },
+        // formato LEGADO (para telas antigas)
+        transacoes: items,
+      });
     }
 
+    // ===========================
+    // POST: criar transação (bet/win/deposit)
+    // ===========================
     if (req.method !== 'POST') {
-      return res.status(405).json({ success: false, mensagem: 'Método não permitido' });
+      return res
+        .status(405)
+        .json({ success: false, mensagem: 'Método não permitido' });
     }
 
-    const body = req.body ?? {};
+    const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body || {};
     const {
       usuario_id,
       valor,
-      tipo,           // 'bet' | 'win' | (eventualmente 'deposit')
+      tipo, // 'bet' | 'win' | 'deposit'
       status = 'completed',
       descricao = null,
-      external_id = null
+      external_id = null,
     } = body;
 
     if (!usuario_id || typeof valor !== 'number' || !tipo) {
       return res.status(400).json({
         success: false,
-        mensagem: 'Campos obrigatórios: usuario_id, valor (number) e tipo.'
+        mensagem: 'Campos obrigatórios: usuario_id, valor (number) e tipo.',
       });
     }
 
-    // Normaliza tipo
     const tipoNorm = String(tipo).toLowerCase();
-    if (!['bet','win','deposit'].includes(tipoNorm)) {
+    if (!['bet', 'win', 'deposit'].includes(tipoNorm)) {
       return res.status(400).json({ success: false, mensagem: 'tipo inválido.' });
     }
 
-    // Para depósito, em geral o webhook credita o saldo.
-    // Aqui vamos considerar deposit apenas se vier status 'completed'.
     if (tipoNorm === 'deposit' && String(status).toLowerCase() !== 'completed') {
-      return res.status(200).json({ success: true, mensagem: 'Depósito não confirmado, ignorado.' });
+      return res
+        .status(200)
+        .json({ success: true, mensagem: 'Depósito não confirmado, ignorado.' });
     }
 
-    // Busca saldo atual do usuário
+    // saldo atual
     const { data: uData, error: uErr } = await supabase
       .from('usuarios')
       .select('saldo')
@@ -71,13 +155,14 @@ export default async function handler(req, res) {
       .single();
 
     if (uErr || !uData) {
-      return res.status(404).json({ success: false, mensagem: 'Usuário não encontrado.' });
+      return res
+        .status(404)
+        .json({ success: false, mensagem: 'Usuário não encontrado.' });
     }
 
     const saldoAtual = Number(uData.saldo) || 0;
 
-    // Delta de saldo conforme tipo
-    // bet => debita; win => credita; deposit => credita (se usar aqui)
+    // delta de saldo
     let delta = 0;
     if (tipoNorm === 'bet') delta = -Math.abs(Number(valor));
     if (tipoNorm === 'win') delta = +Math.abs(Number(valor));
@@ -85,40 +170,39 @@ export default async function handler(req, res) {
 
     const novoSaldo = saldoAtual + delta;
 
-    // Atualiza saldo do usuário
+    // atualiza saldo
     const { error: updErr } = await supabase
       .from('usuarios')
       .update({ saldo: novoSaldo })
       .eq('id', usuario_id);
-
     if (updErr) throw updErr;
 
-    // Registra a transação
+    // insere transação
     const insertData = {
       usuario_id,
-      valor: Math.abs(Number(valor)), // armazena valor positivo; o tipo indica se foi débito/crédito
+      valor: Math.abs(Number(valor)),
       tipo: tipoNorm,
       status,
       descricao,
-      external_id
+      external_id,
     };
-
-    const { error: insErr } = await supabase
+    const { data: inserted, error: insErr } = await supabase
       .from('transacoes')
-      .insert([insertData]);
+      .insert([insertData])
+      .select()
+      .single();
 
     if (insErr) {
-      // rollback simples (best-effort): tenta voltar o saldo
+      // rollback (best-effort)
       await supabase.from('usuarios').update({ saldo: saldoAtual }).eq('id', usuario_id);
       throw insErr;
     }
 
-    // Retorna saldo oficial (para o front sincronizar)
-    return res.status(200).json({
+    return res.status(201).json({
       success: true,
-      data: { saldo: novoSaldo }
+      message: 'Transação registrada',
+      data: { saldo: novoSaldo, transaction: inserted },
     });
-
   } catch (err) {
     console.error('Erro /api/transacoes:', err);
     return res.status(500).json({ success: false, mensagem: err.message });
