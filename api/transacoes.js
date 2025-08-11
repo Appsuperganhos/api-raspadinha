@@ -1,10 +1,10 @@
 // api/transacoes.js
 import { supabase } from './utils/supabaseClient.js';
-import { applyCORS, handleOPTIONS } from './utils/cors.js';
+import { applyCors, handlePreflight } from './utils/cors.js';
 
 export default async function handler(req, res) {
-  if (handleOPTIONS(req, res)) return;
-  applyCORS(req, res);
+  if (handlePreflight(req, res)) return;
+  applyCors(req, res);
 
   try {
     if (req.method === 'GET') {
