@@ -1,22 +1,22 @@
-// api/utils/cors.js
+// api/utils/cors.js  (ESM)
 const ALLOWED_ORIGINS = [
   'https://raspamaster.site',
   'http://localhost:5173',
   'http://localhost:3000',
 ];
 
-export function applyCORS(req, res) {
+export function applyCors(req, res) {
   const origin = req.headers.origin || '';
-  const isAllowed = ALLOWED_ORIGINS.includes(origin);
+  const allowExact = ALLOWED_ORIGINS.includes(origin);
 
-  // 1 origem exata OU wildcard — nunca lista!
-  if (isAllowed) {
+  if (allowExact) {
+    // reflete a origem (permite credenciais) — apenas UM valor
     res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Vary', 'Origin');       // para caches/CDN
+    res.setHeader('Vary', 'Origin');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
   } else {
+    // sem credenciais quando usar "*"
     res.setHeader('Access-Control-Allow-Origin', '*');
-    // com "*" não use Allow-Credentials
   }
 
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
@@ -26,10 +26,11 @@ export function applyCORS(req, res) {
   );
 }
 
-export function handleOPTIONS(req, res) {
+// Retorna true se tratou o preflight
+export function handlePreflight(req, res) {
   if (req.method === 'OPTIONS') {
-    applyCORS(req, res);
-    res.statusCode = 204; // sem corpo
+    applyCors(req, res);
+    res.statusCode = 204; // No Content
     res.end();
     return true;
   }
