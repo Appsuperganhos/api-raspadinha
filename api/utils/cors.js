@@ -1,19 +1,37 @@
 // api/utils/cors.js
-export function applyCors(res, origin = 'https://raspamaster.site') {
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
-  res.setHeader('Access-Control-Allow-Origin', origin); // pode trocar para '*'
+const ALLOWED_ORIGINS = [
+  'https://raspamaster.site',
+  'http://localhost:5173',
+  'http://localhost:3000',
+];
+
+export function applyCORS(req, res) {
+  const origin = req.headers.origin || '';
+  const isAllowed = ALLOWED_ORIGINS.includes(origin);
+
+  // 1 origem exata OU wildcard — nunca lista!
+  if (isAllowed) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');       // para caches/CDN
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+  } else {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    // com "*" não use Allow-Credentials
+  }
+
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   res.setHeader(
     'Access-Control-Allow-Headers',
-    'Content-Type, X-Requested-With, Accept'
+    'Content-Type, Authorization, X-Requested-With, Accept, Origin'
   );
 }
 
-export function handlePreflight(req, res, origin = 'https://raspamaster.site') {
-  applyCors(res, origin);
+export function handleOPTIONS(req, res) {
   if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return true; // já respondeu ao preflight
+    applyCORS(req, res);
+    res.statusCode = 204; // sem corpo
+    res.end();
+    return true;
   }
   return false;
 }
