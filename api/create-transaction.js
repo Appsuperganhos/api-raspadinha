@@ -17,7 +17,14 @@ export default async function handler(req, res) {
   }
   if (req.method !== 'POST') return res.status(405).end();
 
-  const { usuario_id, valor, tipo = 'deposito', status = 'pending' } = req.body;
+  const body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {});
+const {
+  usuario_id,
+  valor,
+  tipo = 'deposit',           // <- padronizado
+  status = 'pending',
+  external_id = null          // <- aceitar external_id (txid) já aqui
+} = body;
   try {
     if (!usuario_id || !valor) throw new Error('Usuário e valor são obrigatórios!');
 
