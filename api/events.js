@@ -3,14 +3,16 @@ import { supabase } from './utils/supabaseClient.js';
 import { applyCors, handlePreflight } from './utils/cors.js';
 
 export default async function handler(req, res) {
+  // --- CORS / OPTIONS ---
   if (handlePreflight(req, res)) return; // OPTIONS
   applyCors(req, res);
 
   try {
-    // ================
+    // =======================================
     // GET /api/events
-    // Lista eventos (com filtros)
-    // ================
+    // - Lista eventos com filtros e paginação
+    // - Resumo por categoria (summary=1) — últimas 24h por padrão
+    // =======================================
     if (req.method === 'GET') {
       const {
         page = '1',
@@ -20,8 +22,49 @@ export default async function handler(req, res) {
         name = '',
         from = '',
         to = '',
+        summary = '',
       } = req.query || {};
 
+      // --------- Resumo por categoria ---------
+      if (String(summary) === '1') {
+        const now = new Date();
+        const toISO = to || now.toISOString();
+        const fromISO =
+          from || new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+
+        const categories = ['auth', 'wallet', 'game', 'admin', 'system', 'debug'];
+
+        // faz 1 contagem por categoria (robusto e simples)
+        const promises = categories.map((cat) =>
+          supabase
+            .from('eventos')
+            .select('id', { count: 'exact', head: true })
+            .eq('category', cat)
+            .gte('created_at', fromISO)
+            .lte('created_at', toISO)
+        );
+
+        const results = await Promise.all(promises);
+        const map = {};
+        categories.forEach((cat, i) => {
+          const { count, error } = results[i] || {};
+          if (error) {
+            // se alguma der erro, segue zerando a categoria (não quebra o endpoint)
+            map[cat] = 0;
+          } else {
+            map[cat] = Number(count || 0);
+          }
+        });
+
+        return res.status(200).json({
+          success: true,
+          data: map,
+          from: fromISO,
+          to: toISO,
+        });
+      }
+
+      // --------- Lista paginada ---------
       const p = Math.max(1, parseInt(page, 10));
       const ps = Math.min(200, Math.max(1, parseInt(pageSize, 10)));
       const fromIdx = (p - 1) * ps;
@@ -53,10 +96,11 @@ export default async function handler(req, res) {
       });
     }
 
-    // ================
+    // =======================================
     // POST /api/events
-    // Cria evento (já estava funcionando)
-    // ================
+    // Cria um evento
+    // body: { name: string, category?: 'auth'|'wallet'|'game'|'admin'|'system'|'debug', uid?: string, props?: object }
+    // =======================================
     if (req.method !== 'POST') {
       return res.status(405).json({ success: false, mensagem: 'Método não permitido' });
     }
