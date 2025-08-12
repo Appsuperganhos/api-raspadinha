@@ -11,27 +11,24 @@ export default async function handler(req, res) {
     // GET
     // =========================
     if (req.method === 'GET') {
-      // Mantém o comportamento ATUAL quando vier userId/usuario_id
       const userId = req.query.userId || req.query.usuario_id;
 
       const page = Math.max(1, parseInt(req.query.page || '1', 10));
       const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize || '20', 10)));
 
-      // Filtros opcionais para o modo "lista geral" (sem userId)
-      const type = String(req.query.type || 'all').toLowerCase();     // deposit | withdraw | bet | win | all
-      const status = String(req.query.status || 'all').toLowerCase(); // completed | pending | paid | ...
+      const type = String(req.query.type || 'all').toLowerCase();
+      const status = String(req.query.status || 'all').toLowerCase();
       const external_id = req.query.external_id || '';
       const from = req.query.from || '';
       const to   = req.query.to || '';
 
-      // Compat com o que você já usa
       const sort = String(req.query.sort || '-date');
       const ascending = sort === 'date';
 
       const fromIdx = (page - 1) * pageSize;
       const toIdx = fromIdx + pageSize - 1;
 
-      // ====== RAMO 1: comportamento antigo (EXIGE userId) ======
+      // ===== RAMO 1: comportamento antigo (com userId) =====
       if (userId) {
         let query = supabase
           .from('transacoes')
@@ -44,7 +41,6 @@ export default async function handler(req, res) {
         const { data, error, count } = await query.range(fromIdx, toIdx);
         if (error) throw error;
 
-        // Mantém o mapeamento que VOCÊ já devolvia
         const items = (data || []).map(t => ({
           id: t.id,
           type: t.tipo,
@@ -61,14 +57,14 @@ export default async function handler(req, res) {
         return res.status(200).json({
           success: true,
           data: { items, total, totalPages, currentPage: page },
-          transacoes: items, // (mantido)
+          transacoes: items,
         });
       }
 
-      // ====== RAMO 2: NOVO — lista geral (sem userId), usado pelo painel ======
+      // ===== RAMO 2: NOVO — lista geral (sem userId) =====
       let q = supabase
         .from('transacoes')
-        .select('id, usuario_id, valor, status, tipo, criado_em, created_at, external_id, descricao', { count: 'exact' });
+        .select('id, usuario_id, valor, status, tipo, criado_em, external_id, descricao', { count: 'exact' });
 
       if (type && type !== 'all') q = q.eq('tipo', type);
       if (status && status !== 'all') q = q.eq('status', status);
@@ -76,20 +72,18 @@ export default async function handler(req, res) {
       if (from) q = q.gte('criado_em', from);
       if (to)   q = q.lte('criado_em', to);
 
-      // Ordena por criado_em (fallback natural do seu schema)
       q = q.order('criado_em', { ascending });
 
       const { data, error, count } = await q.range(fromIdx, toIdx);
       if (error) throw error;
 
-      // Para o ADMIN: ele usa tx.valor, tx.tipo, tx.status, tx.data
       const itemsAdmin = (data || []).map(t => ({
         id: t.id,
         usuario_id: t.usuario_id,
         valor: Number(t.valor),
         tipo: t.tipo,
         status: t.status,
-        data: t.criado_em || t.created_at, // alias para a UI
+        data: t.criado_em,     // alias que a UI usa
         descricao: t.descricao || '',
         external_id: t.external_id || null,
       }));
@@ -105,7 +99,7 @@ export default async function handler(req, res) {
     }
 
     // =========================
-    // POST (mantido como está)
+    // POST (inalterado)
     // =========================
     if (req.method !== 'POST') {
       return res.status(405).json({ success: false, mensagem: 'Método não permitido' });
@@ -126,11 +120,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ success: false, mensagem: 'tipo inválido.' });
     }
 
-    /**
-     * 🚫 Depósitos não são processados aqui!
-     * Use /api/applyDeposit (idempotente e à prova de corrida).
-     * Isso evita duplicidade quando webhook e front disparam juntos.
-     */
+    // Depósitos não por aqui
     if (tipoNorm === 'deposit') {
       return res.status(400).json({
         success: false,
@@ -138,9 +128,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // ===== a partir daqui: só BET e WIN =====
-
-    // 1) Busca saldo atual
+    // 1) Saldo atual
     const { data: uData, error: uErr } = await supabase
       .from('usuarios')
       .select('saldo')
@@ -153,12 +141,12 @@ export default async function handler(req, res) {
 
     const saldoAtual = Number(uData.saldo) || 0;
 
-    // 2) Define delta (bet debita, win credita)
+    // 2) Delta
     let delta = 0;
     if (tipoNorm === 'bet') delta = -Math.abs(Number(valor));
     if (tipoNorm === 'win') delta = +Math.abs(Number(valor));
 
-    // 3) Insere a transação primeiro (se falhar, não mexe em saldo)
+    // 3) Insere transação
     const insertData = {
       usuario_id,
       valor: Math.abs(Number(valor)),
@@ -173,9 +161,7 @@ export default async function handler(req, res) {
       .select()
       .single();
 
-    if (insErr) {
-      throw insErr;
-    }
+    if (insErr) throw insErr;
 
     // 4) Atualiza saldo
     const novoSaldo = saldoAtual + delta;
@@ -185,7 +171,6 @@ export default async function handler(req, res) {
       .eq('id', usuario_id);
 
     if (updErr) {
-      // rollback best-effort
       await supabase.from('transacoes').delete().eq('id', inserted?.id || '');
       throw updErr;
     }
