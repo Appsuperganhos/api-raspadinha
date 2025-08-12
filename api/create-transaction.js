@@ -30,7 +30,7 @@ const {
 
     const { data, error } = await supabase
       .from('transacoes')
-      .insert([{ usuario_id, valor, tipo, status }])
+      .insert([{ usuario_id, valor, tipo, status, external_id }]) // <- grava txid
       .select('*')
       .single();
 
