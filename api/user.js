@@ -17,7 +17,7 @@ export default async function handler(req, res) {
       page = '1',
       pageSize = '100',
       q = '',
-      orderBy = 'created_at',
+      orderBy = 'criado_em',  // <- default resiliente ao seu schema
       orderDir = 'desc',
 
       // para BUSCA ÚNICA
@@ -31,19 +31,41 @@ export default async function handler(req, res) {
       const ps = Math.min(200, Math.max(1, parseInt(pageSize, 10)));
       const fromIdx = (p - 1) * ps;
       const toIdx   = fromIdx + ps - 1;
+      const asc     = String(orderDir).toLowerCase() === 'asc';
 
-      let query = supabase
+      // base query — inclui 'criado_em' (que é como está no seu Supabase)
+      let baseQ = supabase
         .from('usuarios')
-        .select('id, nome, email, telefone, saldo, isAdmin, created_at', { count: 'exact' });
+        .select('id, nome, email, telefone, saldo, isAdmin, criado_em', { count: 'exact' });
 
-      if (q) query = query.or(`nome.ilike.%${q}%,email.ilike.%${q}%`);
+      if (q) baseQ = baseQ.or(`nome.ilike.%${q}%,email.ilike.%${q}%`);
 
-      query = query
-        .order(orderBy, { ascending: orderDir?.toLowerCase() === 'asc' })
-        .range(fromIdx, toIdx);
+      // ordem preferencial de colunas para ordenar, com fallback automático
+      const preferredOrderCols = (() => {
+        const ob = String(orderBy || '').toLowerCase();
+        // se pedirem created_at, tentamos criado_em -> created_at
+        if (ob === 'created_at') return ['criado_em', 'created_at'];
+        // se pedirem criado_em, tentamos criado_em -> created_at
+        if (ob === 'criado_em') return ['criado_em', 'created_at'];
+        // qualquer outra coluna primeiro, depois criado_em e created_at como fallback
+        return [orderBy, 'criado_em', 'created_at'].filter(Boolean);
+      })();
 
-      const { data, error, count } = await query;
-      if (error) throw error;
+      let data, error, count;
+      let lastErr = null;
+
+      for (const col of preferredOrderCols) {
+        // tenta ordenar por cada coluna da lista até funcionar
+        const qTry = baseQ.order(col, { ascending: asc }).range(fromIdx, toIdx);
+        const r = await qTry;
+        if (!r.error) {
+          data = r.data; count = r.count; error = null;
+          break;
+        }
+        lastErr = r.error;
+      }
+
+      if (lastErr) throw lastErr;
 
       return res.status(200).json({
         success: true,
